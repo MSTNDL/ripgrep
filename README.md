@@ -470,3 +470,9 @@ are unofficially maintained and may not be up to date.
 
 * [Chinese](https://github.com/chinanf-boy/ripgrep-zh#%E6%9B%B4%E6%96%B0-)
 * [Spanish](https://github.com/UltiRequiem/traducciones/tree/master/ripgrep)
+
+New Fork:
+dsdjfjsidf
+
+dksoqpdkqsdqoskdqs dqsd kqod qsdkoq
+fbidzsgfu zefuhz fphez fz
