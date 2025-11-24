@@ -1,19 +1,24 @@
-use std::cell::RefCell;
-use std::cmp;
-use std::fmt;
-use std::fs::File;
-use std::io::{self, Read};
-use std::path::Path;
-
-use crate::line_buffer::{
-    self, alloc_error, BufferAllocation, LineBuffer, LineBufferBuilder,
-    LineBufferReader, DEFAULT_BUFFER_CAPACITY,
+use std::{
+    cell::RefCell,
+    cmp,
+    fs::File,
+    io::{self, Read},
+    path::Path,
 };
-use crate::searcher::glue::{MultiLine, ReadByLine, SliceByLine};
-use crate::sink::{Sink, SinkError};
-use encoding_rs;
-use encoding_rs_io::DecodeReaderBytesBuilder;
-use grep_matcher::{LineTerminator, Match, Matcher};
+
+use {
+    encoding_rs_io::DecodeReaderBytesBuilder,
+    grep_matcher::{LineTerminator, Match, Matcher},
+};
+
+use crate::{
+    line_buffer::{
+        self, BufferAllocation, DEFAULT_BUFFER_CAPACITY, LineBuffer,
+        LineBufferBuilder, LineBufferReader, alloc_error,
+    },
+    searcher::glue::{MultiLine, ReadByLine, SliceByLine},
+    sink::{Sink, SinkError},
+};
 
 pub use self::mmap::MmapChoice;
 
@@ -46,7 +51,7 @@ type Range = Match;
 ///    heap, then binary detection is only guaranteed to be applied to the
 ///    parts corresponding to a match. When `Quit` is enabled, then the first
 ///    few KB of the data are searched for binary data.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BinaryDetection(line_buffer::BinaryDetection);
 
 impl BinaryDetection {
@@ -114,12 +119,11 @@ impl BinaryDetection {
 
 /// An encoding to use when searching.
 ///
-/// An encoding can be used to configure a
-/// [`SearcherBuilder`](struct.SearchBuilder.html)
-/// to transcode source data from an encoding to UTF-8 before searching.
+/// An encoding can be used to configure a [`SearcherBuilder`] to transcode
+/// source data from an encoding to UTF-8 before searching.
 ///
 /// An `Encoding` will always be cheap to clone.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Encoding(&'static encoding_rs::Encoding);
 
 impl Encoding {
@@ -176,6 +180,8 @@ pub struct Config {
     /// Whether to stop searching when a non-matching line is found after a
     /// matching line.
     stop_on_nonmatch: bool,
+    /// The maximum number of matches this searcher should emit.
+    max_matches: Option<u64>,
 }
 
 impl Default for Config {
@@ -194,6 +200,7 @@ impl Default for Config {
             encoding: None,
             bom_sniffing: true,
             stop_on_nonmatch: false,
+            max_matches: None,
         }
     }
 }
@@ -233,6 +240,7 @@ impl Config {
 /// This error occurs when a non-sensical configuration is present when trying
 /// to construct a `Searcher` from a `SearcherBuilder`.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ConfigError {
     /// Indicates that the heap limit configuration prevents all possible
     /// search strategies from being used. For example, if the heap limit is
@@ -251,23 +259,12 @@ pub enum ConfigError {
         /// The provided encoding label that could not be found.
         label: Vec<u8>,
     },
-    /// Hints that destructuring should not be exhaustive.
-    ///
-    /// This enum may grow additional variants, so this makes sure clients
-    /// don't count on exhaustive matching. (Otherwise, adding a new variant
-    /// could break existing code.)
-    #[doc(hidden)]
-    __Nonexhaustive,
 }
 
-impl ::std::error::Error for ConfigError {
-    fn description(&self) -> &str {
-        "grep-searcher configuration error"
-    }
-}
+impl std::error::Error for ConfigError {}
 
-impl fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
             ConfigError::SearchUnavailable => {
                 write!(f, "grep config error: no available searchers")
@@ -285,7 +282,6 @@ impl fmt::Display for ConfigError {
                 "grep config error: unknown encoding: {}",
                 String::from_utf8_lossy(label),
             ),
-            _ => panic!("BUG: unexpected variant found"),
         }
     }
 }
@@ -332,8 +328,8 @@ impl SearcherBuilder {
             .bom_sniffing(self.config.bom_sniffing);
 
         Searcher {
-            config: config,
-            decode_builder: decode_builder,
+            config,
+            decode_builder,
             decode_buffer: RefCell::new(vec![0; 8 * (1 << 10)]),
             line_buffer: RefCell::new(self.config.line_buffer()),
             multi_line_buffer: RefCell::new(vec![]),
@@ -508,8 +504,7 @@ impl SearcherBuilder {
     ///
     /// The binary detection strategy determines not only how the searcher
     /// detects binary data, but how it responds to the presence of binary
-    /// data. See the [`BinaryDetection`](struct.BinaryDetection.html) type
-    /// for more information.
+    /// data. See the [`BinaryDetection`] type for more information.
     ///
     /// By default, binary detection is disabled.
     pub fn binary_detection(
@@ -572,6 +567,23 @@ impl SearcherBuilder {
         self.config.stop_on_nonmatch = stop_on_nonmatch;
         self
     }
+
+    /// Sets the maximum number of matches that should be emitted by this
+    /// searcher.
+    ///
+    /// If multi line search is enabled and a match spans multiple lines, then
+    /// that match is counted exactly once for the purposes of enforcing this
+    /// limit, regardless of how many lines it spans.
+    ///
+    /// Note that `0` is a legal value. This will cause the searcher to
+    /// immediately quick without searching anything.
+    ///
+    /// By default, no limit is set.
+    #[inline]
+    pub fn max_matches(&mut self, limit: Option<u64>) -> &mut SearcherBuilder {
+        self.config.max_matches = limit;
+        self
+    }
 }
 
 /// A searcher executes searches over a haystack and writes results to a caller
@@ -616,8 +628,7 @@ impl Searcher {
     /// Create a new searcher with a default configuration.
     ///
     /// To configure the searcher (e.g., invert matching, enable memory maps,
-    /// enable contexts, etc.), use the
-    /// [`SearcherBuilder`](struct.SearcherBuilder.html).
+    /// enable contexts, etc.), use the [`SearcherBuilder`].
     pub fn new() -> Searcher {
         SearcherBuilder::new().build()
     }
@@ -679,9 +690,9 @@ impl Searcher {
             log::trace!("{:?}: searching via memory map", path);
             return self.search_slice(matcher, &mmap, write_to);
         }
-        // Fast path for multi-line searches of files when memory maps are
-        // not enabled. This pre-allocates a buffer roughly the size of the
-        // file, which isn't possible when searching an arbitrary io::Read.
+        // Fast path for multi-line searches of files when memory maps are not
+        // enabled. This pre-allocates a buffer roughly the size of the file,
+        // which isn't possible when searching an arbitrary std::io::Read.
         if self.multi_line_with_matcher(&matcher) {
             log::trace!(
                 "{:?}: reading entire file on to heap for mulitline",
@@ -702,8 +713,8 @@ impl Searcher {
         }
     }
 
-    /// Execute a search over any implementation of `io::Read` and write the
-    /// results to the given sink.
+    /// Execute a search over any implementation of `std::io::Read` and write
+    /// the results to the given sink.
     ///
     /// When possible, this implementation will search the reader incrementally
     /// without reading it into memory. In some cases---for example, if multi
@@ -817,9 +828,8 @@ impl Searcher {
 }
 
 /// The following methods permit querying the configuration of a searcher.
-/// These can be useful in generic implementations of
-/// [`Sink`](trait.Sink.html),
-/// where the output may be tailored based on how the searcher is configured.
+/// These can be useful in generic implementations of [`Sink`], where the
+/// output may be tailored based on how the searcher is configured.
 impl Searcher {
     /// Returns the line terminator used by this searcher.
     #[inline]
@@ -855,11 +865,25 @@ impl Searcher {
         self.config.multi_line
     }
 
-    /// Returns true if and only if this searcher is configured to stop when in
+    /// Returns true if and only if this searcher is configured to stop when it
     /// finds a non-matching line after a matching one.
     #[inline]
     pub fn stop_on_nonmatch(&self) -> bool {
         self.config.stop_on_nonmatch
+    }
+
+    /// Returns the maximum number of matches emitted by this searcher, if
+    /// such a limit was set.
+    ///
+    /// If multi line search is enabled and a match spans multiple lines, then
+    /// that match is counted exactly once for the purposes of enforcing this
+    /// limit, regardless of how many lines it spans.
+    ///
+    /// Note that `0` is a legal value. This will cause the searcher to
+    /// immediately quick without searching anything.
+    #[inline]
+    pub fn max_matches(&self) -> Option<u64> {
+        self.config.max_matches
     }
 
     /// Returns true if and only if this searcher will choose a multi-line
@@ -1014,14 +1038,16 @@ fn slice_has_bom(slice: &[u8]) -> bool {
         None => return false,
         Some((enc, _)) => enc,
     };
+    log::trace!("found byte-order mark (BOM) for encoding {enc:?}");
     [encoding_rs::UTF_16LE, encoding_rs::UTF_16BE, encoding_rs::UTF_8]
         .contains(&enc)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::testutil::{KitchenSink, RegexMatcher};
+
+    use super::*;
 
     #[test]
     fn config_error_heap_limit() {

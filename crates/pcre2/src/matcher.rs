@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
-use grep_matcher::{Captures, Match, Matcher};
-use pcre2::bytes::{CaptureLocations, Regex, RegexBuilder};
+use {
+    grep_matcher::{Captures, Match, Matcher},
+    pcre2::bytes::{CaptureLocations, Regex, RegexBuilder},
+};
 
 use crate::error::Error;
 
@@ -53,7 +55,12 @@ impl RegexMatcherBuilder {
                 format!("(?:{})", p.as_ref())
             });
         }
-        let mut singlepat = pats.join("|");
+        let mut singlepat = if patterns.is_empty() {
+            // A way to spell a pattern that can never match anything.
+            r"[^\S\s]".to_string()
+        } else {
+            pats.join("|")
+        };
         if self.case_smart && !has_uppercase_literal(&singlepat) {
             builder.caseless(true);
         }
@@ -426,8 +433,9 @@ fn has_uppercase_literal(pattern: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use grep_matcher::LineMatchKind;
+
     use super::*;
-    use grep_matcher::{LineMatchKind, Matcher};
 
     // Test that enabling word matches does the right thing and demonstrate
     // the difference between it and surrounding the regex in `\b`.

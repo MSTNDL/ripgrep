@@ -4,23 +4,25 @@ use bstr::{ByteSlice, ByteVec};
 
 /// The final component of the path, if it is a normal file.
 ///
-/// If the path terminates in ., .., or consists solely of a root of prefix,
-/// file_name will return None.
-pub fn file_name<'a>(path: &Cow<'a, [u8]>) -> Option<Cow<'a, [u8]>> {
+/// If the path terminates in `..`, or consists solely of a root of prefix,
+/// file_name will return `None`.
+pub(crate) fn file_name<'a>(path: &Cow<'a, [u8]>) -> Option<Cow<'a, [u8]>> {
     if path.is_empty() {
-        return None;
-    } else if path.last_byte() == Some(b'.') {
         return None;
     }
     let last_slash = path.rfind_byte(b'/').map(|i| i + 1).unwrap_or(0);
-    Some(match *path {
+    let got = match *path {
         Cow::Borrowed(path) => Cow::Borrowed(&path[last_slash..]),
         Cow::Owned(ref path) => {
             let mut path = path.clone();
             path.drain_bytes(..last_slash);
             Cow::Owned(path)
         }
-    })
+    };
+    if got == &b".."[..] {
+        return None;
+    }
+    Some(got)
 }
 
 /// Return a file extension given a path's file name.
@@ -39,7 +41,9 @@ pub fn file_name<'a>(path: &Cow<'a, [u8]>) -> Option<Cow<'a, [u8]>> {
 /// a pattern like `*.rs` is obviously trying to match files with a `rs`
 /// extension, but it also matches files like `.rs`, which doesn't have an
 /// extension according to std::path::Path::extension.
-pub fn file_name_ext<'a>(name: &Cow<'a, [u8]>) -> Option<Cow<'a, [u8]>> {
+pub(crate) fn file_name_ext<'a>(
+    name: &Cow<'a, [u8]>,
+) -> Option<Cow<'a, [u8]>> {
     if name.is_empty() {
         return None;
     }
@@ -60,7 +64,7 @@ pub fn file_name_ext<'a>(name: &Cow<'a, [u8]>) -> Option<Cow<'a, [u8]>> {
 /// Normalizes a path to use `/` as a separator everywhere, even on platforms
 /// that recognize other characters as separators.
 #[cfg(unix)]
-pub fn normalize_path(path: Cow<'_, [u8]>) -> Cow<'_, [u8]> {
+pub(crate) fn normalize_path(path: Cow<'_, [u8]>) -> Cow<'_, [u8]> {
     // UNIX only uses /, so we're good.
     path
 }
@@ -68,11 +72,11 @@ pub fn normalize_path(path: Cow<'_, [u8]>) -> Cow<'_, [u8]> {
 /// Normalizes a path to use `/` as a separator everywhere, even on platforms
 /// that recognize other characters as separators.
 #[cfg(not(unix))]
-pub fn normalize_path(mut path: Cow<[u8]>) -> Cow<[u8]> {
+pub(crate) fn normalize_path(mut path: Cow<[u8]>) -> Cow<[u8]> {
     use std::path::is_separator;
 
     for i in 0..path.len() {
-        if path[i] == b'/' || !is_separator(path[i] as char) {
+        if path[i] == b'/' || !is_separator(char::from(path[i])) {
             continue;
         }
         path.to_mut()[i] = b'/';
@@ -84,7 +88,7 @@ pub fn normalize_path(mut path: Cow<[u8]>) -> Cow<[u8]> {
 mod tests {
     use std::borrow::Cow;
 
-    use bstr::{ByteVec, B};
+    use bstr::{B, ByteVec};
 
     use super::{file_name_ext, normalize_path};
 

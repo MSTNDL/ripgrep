@@ -1,8 +1,10 @@
-use std::ffi::{OsStr, OsString};
-use std::fs::File;
-use std::io;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    ffi::{OsStr, OsString},
+    fs::File,
+    io,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 
@@ -161,7 +163,7 @@ impl DecompressionMatcher {
     /// Create a new matcher with default rules.
     ///
     /// To add more matching rules, build a matcher with
-    /// [`DecompressionMatcherBuilder`](struct.DecompressionMatcherBuilder.html).
+    /// [`DecompressionMatcherBuilder`].
     pub fn new() -> DecompressionMatcher {
         DecompressionMatcherBuilder::new()
             .build()
@@ -175,7 +177,7 @@ impl DecompressionMatcher {
     /// If there are multiple possible commands matching the given path, then
     /// the command added last takes precedence.
     pub fn command<P: AsRef<Path>>(&self, path: P) -> Option<Command> {
-        for i in self.globs.matches(path).into_iter().rev() {
+        if let Some(i) = self.globs.matches(path).into_iter().next_back() {
             let decomp_cmd = &self.commands[i];
             let mut cmd = Command::new(&decomp_cmd.bin);
             cmd.args(&decomp_cmd.args);
@@ -221,9 +223,8 @@ impl DecompressionReaderBuilder {
         path: P,
     ) -> Result<DecompressionReader, CommandError> {
         let path = path.as_ref();
-        let mut cmd = match self.matcher.command(path) {
-            None => return DecompressionReader::new_passthru(path),
-            Some(cmd) => cmd,
+        let Some(mut cmd) = self.matcher.command(path) else {
+            return DecompressionReader::new_passthru(path);
         };
         cmd.arg(path);
 
@@ -302,9 +303,7 @@ impl DecompressionReaderBuilder {
 /// The default matching rules are probably good enough for most cases, and if
 /// they require revision, pull requests are welcome. In cases where they must
 /// be changed or extended, they can be customized through the use of
-/// [`DecompressionMatcherBuilder`](struct.DecompressionMatcherBuilder.html)
-/// and
-/// [`DecompressionReaderBuilder`](struct.DecompressionReaderBuilder.html).
+/// [`DecompressionMatcherBuilder`] and [`DecompressionReaderBuilder`].
 ///
 /// By default, this reader will asynchronously read the processes' stderr.
 /// This prevents subtle deadlocking bugs for noisy processes that write a lot
@@ -320,15 +319,14 @@ impl DecompressionReaderBuilder {
 /// matcher.
 ///
 /// ```no_run
-/// use std::io::Read;
-/// use std::process::Command;
+/// use std::{io::Read, process::Command};
+///
 /// use grep_cli::DecompressionReader;
 ///
-/// # fn example() -> Result<(), Box<::std::error::Error>> {
 /// let mut rdr = DecompressionReader::new("/usr/share/man/man1/ls.1.gz")?;
 /// let mut contents = vec![];
 /// rdr.read_to_end(&mut contents)?;
-/// # Ok(()) }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug)]
 pub struct DecompressionReader {
@@ -347,9 +345,7 @@ impl DecompressionReader {
     ///
     /// This uses the default matching rules for determining how to decompress
     /// the given file. To change those matching rules, use
-    /// [`DecompressionReaderBuilder`](struct.DecompressionReaderBuilder.html)
-    /// and
-    /// [`DecompressionMatcherBuilder`](struct.DecompressionMatcherBuilder.html).
+    /// [`DecompressionReaderBuilder`] and [`DecompressionMatcherBuilder`].
     ///
     /// When creating readers for many paths. it is better to use the builder
     /// since it will amortize the cost of constructing the matcher.
@@ -418,6 +414,8 @@ impl io::Read for DecompressionReader {
 /// relative path. We permit this since it is assumed that the user has set
 /// this explicitly, and thus, desires this behavior.
 ///
+/// # Platform behavior
+///
 /// On non-Windows, this is a no-op.
 pub fn resolve_binary<P: AsRef<Path>>(
     prog: P,
@@ -453,10 +451,7 @@ fn try_resolve_binary<P: AsRef<Path>>(
     use std::env;
 
     fn is_exe(path: &Path) -> bool {
-        let md = match path.metadata() {
-            Err(_) => return false,
-            Ok(md) => md,
-        };
+        let Ok(md) = path.metadata() else { return false };
         !md.is_dir()
     }
 
@@ -464,15 +459,12 @@ fn try_resolve_binary<P: AsRef<Path>>(
     if prog.is_absolute() {
         return Ok(prog.to_path_buf());
     }
-    let syspaths = match env::var_os("PATH") {
-        Some(syspaths) => syspaths,
-        None => {
-            let msg = "system PATH environment variable not found";
-            return Err(CommandError::io(io::Error::new(
-                io::ErrorKind::Other,
-                msg,
-            )));
-        }
+    let Some(syspaths) = env::var_os("PATH") else {
+        let msg = "system PATH environment variable not found";
+        return Err(CommandError::io(io::Error::new(
+            io::ErrorKind::Other,
+            msg,
+        )));
     };
     for syspath in env::split_paths(&syspaths) {
         if syspath.as_os_str().is_empty() {

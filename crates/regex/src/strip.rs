@@ -20,11 +20,11 @@ use crate::error::{Error, ErrorKind};
 ///
 /// Note that as of regex 1.9, this routine could theoretically be implemented
 /// without returning an error. Namely, for example, we could turn
-/// `foo\nbar` into `foo[a&&b]bar`. That is, replace line terminators with a
+/// `foo\nbar` into `foo[a&&b]bar`. That is, replace line terminator with a
 /// sub-expression that can never match anything. Thus, ripgrep would accept
-/// such regexes and just silently not match anything. Regex versions prior to 1.8
-/// don't support such constructs. I ended up deciding to leave the existing
-/// behavior of returning an error instead. For example:
+/// such regexes and just silently not match anything. Regex versions prior
+/// to 1.8 don't support such constructs. I ended up deciding to leave the
+/// existing behavior of returning an error instead. For example:
 ///
 /// ```text
 /// $ echo -n 'foo\nbar\n' | rg 'foo\nbar'
@@ -122,7 +122,7 @@ fn strip_from_match_ascii(expr: Hir, byte: u8) -> Result<Hir, Error> {
 mod tests {
     use regex_syntax::Parser;
 
-    use super::{strip_from_match, LineTerminator};
+    use super::{LineTerminator, strip_from_match};
     use crate::error::Error;
 
     fn roundtrip(pattern: &str, byte: u8) -> String {
